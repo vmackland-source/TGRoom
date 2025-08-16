@@ -1,41 +1,52 @@
+// pages/api/checkout.js
+import Stripe from "stripe";
 
-import Stripe from 'stripe';
-import prisma from '../../lib/prisma';
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2023-10-16' });
-
-export default async function handler(req, res){
-  if (req.method !== 'POST') return res.status(405).json({error:'Method not allowed'});
-  const { purpose, amount, meta } = req.body || {};
-  if (!purpose || !amount) return res.status(400).json({error:'Missing purpose/amount'});
-  if (!process.env.NEXT_PUBLIC_SITE_URL) return res.status(500).json({error:'Missing NEXT_PUBLIC_SITE_URL'});
-
-  if (!process.env.STRIPE_SECRET_KEY) {
-    // Dev fallback: pretend checkout by redirecting back
-    return res.json({ url: process.env.NEXT_PUBLIC_SITE_URL + '/?paid=1' });
+export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const session = await stripe.checkout.sessions.create({
-    mode: 'payment',
-    line_items: [{
-      price_data: {
-        currency: 'usd',
-        product_data: { name: purpose.toUpperCase() },
-        unit_amount: amount
-      },
-      quantity: 1
-    }],
-    success_url: process.env.NEXT_PUBLIC_SITE_URL + '/?success=1',
-    cancel_url: process.env.NEXT_PUBLIC_SITE_URL + '/?canceled=1',
-    metadata: { purpose, ...(meta||{}) }
-  });
+  try {
+    const { type, amount, meta } = req.body;
 
-  // store payment record
-  await prisma.payment.create({
-    data: {
-      purpose, amount, status: 'created', stripeSession: session.id
-    }
-  });
+    // Default to empty object if no metadata
+    const metadata = {
+      type,
+      ...meta,
+    };
 
-  res.json({ url: session.url });
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ["card"],
+      line_items: [
+        {
+          price_data: {
+            currency: "usd",
+            product_data: {
+              name:
+                type === "membership"
+                  ? "The Green Room Membership"
+                  : type === "reservation"
+                  ? "Cafe Reservation"
+                  : type === "social-entry"
+                  ? "Social After Dark Entry"
+                  : "After Dark Order",
+            },
+            unit_amount: Math.round(amount * 100), // Stripe uses cents
+          },
+          quantity: 1,
+        },
+      ],
+      mode: "payment",
+      metadata,
+      success_url: `${req.headers.origin}/thank-you?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${req.headers.origin}/cancelled`,
+    });
+
+    return res.status(200).json({ url: session.url });
+  } catch (err) {
+    console.error("Stripe checkout error:", err);
+    return res.status(500).json({ error: err.message });
+  }
 }
