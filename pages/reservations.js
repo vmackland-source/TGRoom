@@ -1,56 +1,33 @@
 // pages/reservations.js
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-const PRICE_PER_PERSON = 80;          // base price
-const MEMBER_DISCOUNT_TOTAL = 10;     // $10 off the reservation total (if member)
-const ALLOWED_DAYS = [5, 6];          // Fri=5, Sat=6
+/**
+ * Cafe Reservations
+ * - Open Friday & Saturday only
+ * - Time slots: 5 PM through 10 PM
+ * - 1.5–2 hours dining time
+ * - $80 per person; Members get $10 off the total reservation
+ * - Max 4 per party
+ * - 21+ only; names & DOBs collected; IDs checked on arrival
+ * - Cancellation & Refund Policy:
+ *   50% refund if cancelled at least 24 hours before reservation time.
+ *   No full refunds. No refund within 24 hours.
+ */
 
-// --- Policy text (shown and sent in metadata) ---
-const POLICY_TEXT =
-  "Cancellation & Refund Policy: All reservation cancellations are eligible for a 50% refund if made at least 24 hours prior to the scheduled reservation time. No full refunds will be issued under any circumstances. Cancellations made less than 24 hours before the reservation will not be refunded.";
+const PRICE_PER_PERSON = 80;
+const MEMBER_DISCOUNT = 10;
+const MAX_PARTY = 4;
 
-const DINING_NOTE =
-  "Dinner window is 1.5–2 hours. Please arrive on time. Reservation times available Friday & Saturday, 5:00 PM–10:00 PM. Government-issued ID will be checked on arrival for all guests.";
-
-// build 30-min slots from 5:00 PM to 10:00 PM inclusive
-const TIME_SLOTS = (() => {
-  const slots = [];
-  const start = 17 * 60; // 17:00
-  const end = 22 * 60;   // 22:00
-  for (let m = start; m <= end; m += 30) {
-    const h = Math.floor(m / 60);
-    const min = m % 60;
-    const label = to12h(h, min);
-    slots.push({ value: `${pad(h)}:${pad(min)}`, label });
-  }
-  return slots;
-})();
-
-function pad(n) { return n.toString().padStart(2, "0"); }
-function to12h(h24, m) {
-  const ampm = h24 >= 12 ? "PM" : "AM";
-  const h12 = ((h24 + 11) % 12) + 1;
-  return `${h12}:${m.toString().padStart(2, "0")} ${ampm}`;
-}
-function isAllowedDay(dateStr) {
-  if (!dateStr) return false;
-  const d = new Date(dateStr + "T00:00:00");
-  return ALLOWED_DAYS.includes(d.getDay());
-}
-function is24hOrMoreAway(dateStr, timeStr) {
-  if (!dateStr || !timeStr) return false;
-  const now = new Date();
-  const dt = new Date(`${dateStr}T${timeStr}:00`);
-  return dt.getTime() - now.getTime() >= 24 * 60 * 60 * 1000;
+// Helpers
+function validEmail(e) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 }
 function normPhone(p) {
-  const digits = p.replace(/[^\d+]/g, "");
+  const digits = (p || "").replace(/[^\d+]/g, "");
+  if (!digits) return "";
   if (digits.startsWith("+")) return digits;
   if (digits.length === 10) return `+1${digits}`;
   return digits;
-}
-function validEmail(e) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 }
 function calcAge(dob) {
   if (!dob) return 0;
@@ -61,130 +38,73 @@ function calcAge(dob) {
   if (m < 0 || (m === 0 && today.getDate() < d.getDate())) a--;
   return a;
 }
+function isFriOrSat(yyyyMmDd) {
+  if (!yyyyMmDd) return false;
+  const d = new Date(yyyyMmDd + "T00:00:00");
+  const day = d.getDay(); // 0=Sun ... 5=Fri, 6=Sat
+  return day === 5 || day === 6;
+}
 
 export default function ReservationsPage() {
-  // Booker contact
-  const [name, setName] = useState("");
+  // Contact + membership
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
-
-  // booking
-  const [partySize, setPartySize] = useState(2); // max 4
-  const [date, setDate] = useState(""); // yyyy-mm-dd (Fri/Sat only)
-  const [time, setTime] = useState(""); // "HH:MM"
+  const [contactName, setContactName] = useState("");
   const [isMember, setIsMember] = useState(false);
 
-  // guest details (each guest must be 21+)
-  const [guests, setGuests] = useState([
-    { fullName: "", dob: "" },
-    { fullName: "", dob: "" },
-    { fullName: "", dob: "" },
-    { fullName: "", dob: "" },
-  ]);
+  // Reservation details
+  const [date, setDate] = useState("");
+  const [time, setTime] = useState("");
+  const [partySize, setPartySize] = useState(2);
 
-  // cancel form
-  const [cancelCode, setCancelCode] = useState("");
-  const [cancelEmail, setCancelEmail] = useState("");
-  const [cancelMsg, setCancelMsg] = useState("");
+  // Guests array (name + dob per attendee)
+  const [guests, setGuests] = useState(
+    Array.from({ length: MAX_PARTY }, () => ({ fullName: "", dob: "" }))
+  );
 
-  // clamp party size 1..4
-  const actualParty = Math.min(Math.max(partySize, 1), 4);
+  // Keep only needed guest slots (1..partySize)
+  useEffect(() => {
+    setGuests((prev) =>
+      prev.map((g, i) => (i < partySize ? g : { fullName: "", dob: "" }))
+    );
+  }, [partySize]);
 
-  const subtotal = useMemo(() => actualParty * PRICE_PER_PERSON, [actualParty]);
-  const discount = isMember ? MEMBER_DISCOUNT_TOTAL : 0;
-  const total = Math.max(0, subtotal - discount);
+  // Pricing
+  const subtotal = useMemo(() => partySize * PRICE_PER_PERSON, [partySize]);
+  const discount = useMemo(() => (isMember ? MEMBER_DISCOUNT : 0), [isMember]);
+  const total = useMemo(() => Math.max(0, subtotal - discount), [subtotal, discount]);
 
-  // Validate guest list (for the chosen party size)
-  const guestsSlice = guests.slice(0, actualParty);
-  const allGuestsValid = guestsSlice.every(g => g.fullName && g.dob && calcAge(g.dob) >= 21);
+  // Validation
+  const allGuestsOk = useMemo(() => {
+    for (let i = 0; i < partySize; i++) {
+      const g = guests[i];
+      if (!g?.fullName || !g?.dob) return false;
+      if (calcAge(g.dob) < 21) return false;
+    }
+    return true;
+  }, [guests, partySize]);
 
-  const formOK =
-    name &&
+  const baseOk =
+    contactName.trim().length > 0 &&
     validEmail(email) &&
-    phone &&
-    actualParty > 0 &&
-    date &&
-    time &&
-    isAllowedDay(date) &&
-    allGuestsValid;
+    !!time &&
+    !!date &&
+    isFriOrSat(date) &&
+    partySize >= 1 &&
+    partySize <= MAX_PARTY;
 
-  async function pay() {
-    if (!formOK) return;
+  const canPay = baseOk && allGuestsOk;
 
-    const metadata = {
-      type: "reservation",
-      name,
-      email,
-      phone: normPhone(phone),
-      partySize: String(actualParty),
-      date,
-      time,
-      isMember: isMember ? "true" : "false",
-      guests: JSON.stringify(guestsSlice.map(g => ({
-        fullName: g.fullName,
-        dob: g.dob,
-        age: calcAge(g.dob)
-      }))),
-      lineItems: JSON.stringify([{ label: "Reservation", qty: actualParty, price: PRICE_PER_PERSON }]),
-      discountApplied: isMember ? `$${MEMBER_DISCOUNT_TOTAL}` : "$0",
-      policy: POLICY_TEXT,
-      notes: DINING_NOTE,
-    };
+  // Time slot options (5 PM -> 10 PM hourly)
+  const TIME_SLOTS = ["5:00 PM", "6:00 PM", "7:00 PM", "8:00 PM", "9:00 PM", "10:00 PM"];
 
-    try {
-      const res = await fetch("/api/checkout", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          amount: Math.round(total * 100),
-          description: `Cafe Reservation (${actualParty} guests)`,
-          successPath: "/reservations?status=paid",
-          cancelPath: "/reservations",
-          metadata,
-        }),
-      });
-      const data = await res.json();
-      if (data?.url) {
-        window.location.href = data.url;
-      } else {
-        alert("Payment couldn't start. Please try again.");
-      }
-    } catch (err) {
-      console.error(err);
-      alert("Payment error. Please try again.");
-    }
-  }
-
-  async function requestCancel() {
-    if (!cancelCode || !validEmail(cancelEmail)) {
-      setCancelMsg("Enter your booking code and a valid email.");
-      return;
-    }
-    try {
-      const res = await fetch("/api/reservations/cancel", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: cancelCode, email: cancelEmail }),
-      });
-      if (res.ok) {
-        const out = await res.json().catch(() => ({}));
-        setCancelMsg(out?.message || "Cancellation request received. We’ll email you shortly.");
-      } else {
-        const t = await res.text();
-        setCancelMsg(t || "Could not process cancellation. Try again or contact support.");
-      }
-    } catch (e) {
-      console.error(e);
-      setCancelMsg("Network error. Try again later.");
-    }
-  }
-
-  // --- styles ---
+  // Styled bits consistent with your theme
   const sectionCard = {
     borderRadius: 14,
     padding: 20,
     marginBottom: 18,
-    background: "linear-gradient(180deg, rgba(255,255,255,.02), transparent), var(--panel)",
+    background:
+      "linear-gradient(180deg, rgba(255,255,255,.02), transparent), var(--panel)",
     border: "1px solid rgba(216,192,122,.15)",
     boxShadow: "0 8px 30px rgba(0,0,0,.35)",
   };
@@ -198,6 +118,7 @@ export default function ReservationsPage() {
     color: "var(--text)",
     outline: "none",
   };
+  const selectBase = { ...inputBase };
   const payBtn = (ok) => ({
     marginTop: 14,
     width: "100%",
@@ -209,23 +130,61 @@ export default function ReservationsPage() {
     color: ok ? "#000" : "var(--muted)",
     cursor: ok ? "pointer" : "not-allowed",
   });
-  const slotBtn = (active) => ({
-    padding: "8px 10px",
-    borderRadius: 10,
-    border: "1px solid rgba(216,192,122,.25)",
-    background: active ? "rgba(216,192,122,.18)" : "rgba(0,0,0,.2)",
-    color: "var(--text)",
-    cursor: "pointer",
-    minWidth: 90,
-    textAlign: "center",
-  });
+
+  // ---- UPDATED PAY: posts to /api/checkout with { type, amount, meta } ----
+  async function pay() {
+    if (!canPay) return;
+
+    const meta = {
+      type: "reservation",
+      contactEmail: email,
+      contactPhone: normPhone(phone),
+      name: contactName,
+      partySize: String(partySize),
+      date,
+      time,
+      isMember: isMember ? "true" : "false",
+      guests: JSON.stringify(
+        guests.slice(0, partySize).map((g) => ({
+          fullName: g.fullName,
+          dob: g.dob,
+          age: calcAge(g.dob),
+        }))
+      ),
+      policy:
+        "Cancellation & Refund Policy: 50% refund if cancelled at least 24 hours prior to the scheduled reservation time. No full refunds. No refund within 24 hours. Be on time; dining time is 1.5–2 hours.",
+      notes:
+        "Dining window: 1.5–2 hours. Friday & Saturday only. Max party size 4. All guests must be 21+ (IDs checked on arrival).",
+    };
+
+    try {
+      const res = await fetch("/api/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "reservation", amount: total, meta }),
+      });
+      const data = await res.json();
+      if (data?.url) {
+        window.location.href = data.url; // Stripe Checkout
+      } else {
+        alert("Could not start payment. Please try again.");
+      }
+    } catch (e) {
+      console.error(e);
+      alert("Payment error. Please try again.");
+    }
+  }
+
+  // Top-left welcome
+  const Welcome = (
+    <div className="font-orange" style={{ color: "var(--gold)", fontSize: 14, marginBottom: 12 }}>
+      WELCOME TO THE GREEN ROOM
+    </div>
+  );
 
   return (
     <section>
-      {/* Top-left welcome text */}
-      <div className="font-orange" style={{ color: "var(--gold)", fontSize: 14, marginBottom: 12 }}>
-        WELCOME TO THE GREEN ROOM
-      </div>
+      {Welcome}
 
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
@@ -233,153 +192,123 @@ export default function ReservationsPage() {
         <h2 className="font-orange gold-emboss" style={{ fontSize: 32 }}>Cafe Reservations</h2>
       </div>
 
-      {/* Policy & notes */}
-      <div style={{ ...sectionCard }}>
-        <div style={{ color: "var(--muted)", fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
-          <strong style={{ color: "var(--gold-soft)" }}>Cancellation & Refund Policy:</strong> {POLICY_TEXT}
+      {/* Overview + Policy */}
+      <div style={sectionCard}>
+        <p style={{ color: "var(--muted)", fontSize: 13, lineHeight: 1.6 }}>
+          Open <span className="gold-emboss">Friday & Saturday</span> with reservation time slots from
+          {" "}<span className="gold-emboss">5 PM</span> through <span className="gold-emboss">10 PM</span>. Dining time is <span className="gold-emboss">1.5–2 hours</span>.
           <br /><br />
-          {DINING_NOTE}
+          Price: <span className="gold-emboss">$80 per person</span>. Members receive <span className="gold-emboss">$10 off</span> the reservation total.
           <br /><br />
-          Private parties (more than 4 or special events), please contact us directly:{" "}
-          <a href="mailto:DoItAllEnt610@gmail.com" style={{ color: "var(--gold-soft)" }}>DoItAllEnt610@gmail.com</a>
+          <strong>Cancellation & Refund Policy:</strong> 50% refund if cancelled at least 24 hours before your reservation.
+          No full refunds. Cancellations made less than 24 hours prior will not be refunded. Please arrive on time.
+          <br /><br />
+          Max party size: 4. All guests must be 21+. IDs are checked on arrival.
+          For private events, contact: <a href="mailto:DoItAllEnt610@gmail.com" style={{ color: "var(--gold)" }}>DoItAllEnt610@gmail.com</a>.
+        </p>
+      </div>
+
+      {/* Contact + Member */}
+      <div style={sectionCard}>
+        <h3 className="font-orange gold-emboss" style={{ fontSize: 20, margin: 0 }}>Your Info</h3>
+        <div style={{ display: "grid", gap: 12, marginTop: 12 }}>
+          <Field label="Full name" value={contactName} onChange={setContactName} inputBase={inputBase} labelStyle={labelStyle} />
+          <Field type="email" label="Email (for confirmation)" value={email} onChange={setEmail} inputBase={inputBase} labelStyle={labelStyle} />
+          <Field label="Phone (for SMS)" value={phone} onChange={setPhone} placeholder="+1 555 555 5555" inputBase={inputBase} labelStyle={labelStyle} />
+          <label style={{ ...labelStyle, display: "flex", gap: 8, alignItems: "center" }}>
+            <input type="checkbox" checked={isMember} onChange={(e) => setIsMember(e.target.checked)} style={{ accentColor: "var(--gold)" }} />
+            I am a member (applies $10 off the reservation total)
+          </label>
         </div>
       </div>
 
-      <style>{`@media (min-width: 992px){ .grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:18px; } }`}</style>
-      <div className="grid-2">
-        {/* Booking Card */}
-        <div style={sectionCard}>
-          <h3 className="font-orange gold-emboss" style={{ fontSize: 20 }}>Book your table</h3>
-
-          {/* Contact */}
-          <div style={{ display: "grid", gap: 12, marginTop: 12 }}>
-            <Field label="Full name (booker)" value={name} onChange={setName} inputBase={inputBase} labelStyle={labelStyle} />
-            <Field type="email" label="Email (for confirmation)" value={email} onChange={setEmail} inputBase={inputBase} labelStyle={labelStyle} />
-            <Field label="Phone (for SMS)" value={phone} onChange={setPhone} placeholder="+1 555 555 5555" inputBase={inputBase} labelStyle={labelStyle} />
-          </div>
-
-          {/* Party size (1–4) */}
-          <div style={{ marginTop: 12 }}>
-            <label style={labelStyle}>Party size (max 4)</label>
-            <select
-              value={partySize}
-              onChange={(e) => setPartySize(Math.min(4, Math.max(1, parseInt(e.target.value || "1", 10))))}
-              style={{ ...inputBase, marginTop: 6 }}
-            >
-              {[1,2,3,4].map(n => <option key={n} value={n}>{n}</option>)}
-            </select>
-          </div>
-
-          {/* Date (Fri/Sat only) */}
-          <div style={{ marginTop: 12 }}>
-            <label style={labelStyle}>Date (Friday or Saturday)</label>
+      {/* Reservation details */}
+      <div style={sectionCard}>
+        <h3 className="font-orange gold-emboss" style={{ fontSize: 20, margin: 0 }}>Reservation Details</h3>
+        <div style={{ display: "grid", gap: 12, marginTop: 12 }}>
+          <div>
+            <label style={labelStyle}>Date (Friday or Saturday only)</label>
             <input
               type="date"
               value={date}
               onChange={(e) => setDate(e.target.value)}
               style={{ ...inputBase, marginTop: 6 }}
             />
-            {!isAllowedDay(date) && date && (
+            {!date ? null : isFriOrSat(date) ? null : (
               <div style={{ color: "#ff6b6b", fontSize: 12, marginTop: 6 }}>
-                Reservations are available Friday & Saturday only.
+                Please choose a Friday or Saturday date.
               </div>
             )}
           </div>
 
-          {/* Time slots (5:00 PM—10:00 PM) */}
-          <div style={{ marginTop: 12 }}>
-            <label style={labelStyle}>Time (5:00 PM – 10:00 PM)</label>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
-              {TIME_SLOTS.map((s) => (
-                <button
-                  key={s.value}
-                  type="button"
-                  onClick={() => setTime(s.value)}
-                  style={slotBtn(time === s.value)}
-                >
-                  {s.label}
-                </button>
+          <div>
+            <label style={labelStyle}>Time</label>
+            <select value={time} onChange={(e) => setTime(e.target.value)} style={{ ...selectBase, marginTop: 6 }}>
+              <option value="">Select a time</option>
+              {TIME_SLOTS.map((t) => (
+                <option key={t} value={t}>{t}</option>
               ))}
-            </div>
+            </select>
           </div>
 
-          {/* Member discount */}
-          <label style={{ ...labelStyle, display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}>
-            <input type="checkbox" checked={isMember} onChange={(e) => setIsMember(e.target.checked)} style={{ accentColor: "var(--gold)" }} />
-            I’m a member (−$10 off reservation total)
-          </label>
-
-          {/* Guest details (each must be 21+) */}
-          <div style={{ marginTop: 16 }}>
-            <h4 className="font-orange gold-emboss" style={{ fontSize: 18, margin: 0 }}>Guest details (21+)</h4>
-            <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 6 }}>
-              Each guest must provide full name and date of birth. IDs are checked on arrival.
-            </p>
-            <div style={{ display: "grid", gap: 10, marginTop: 8 }}>
-              {Array.from({ length: actualParty }).map((_, idx) => (
-                <GuestRow
-                  key={idx}
-                  index={idx + 1}
-                  data={guests[idx]}
-                  onChange={(g) => {
-                    setGuests(prev => {
-                      const next = [...prev];
-                      next[idx] = g;
-                      return next;
-                    });
-                  }}
-                  inputBase={inputBase}
-                  labelStyle={labelStyle}
-                />
+          <div>
+            <label style={labelStyle}>Party Size (max 4)</label>
+            <select
+              value={partySize}
+              onChange={(e) => setPartySize(parseInt(e.target.value, 10))}
+              style={{ ...selectBase, marginTop: 6 }}
+            >
+              {[1, 2, 3, 4].map((n) => (
+                <option key={n} value={n}>{n}</option>
               ))}
-            </div>
-            {!allGuestsValid && <div style={{ color: "#ff6b6b", fontSize: 12, marginTop: 6 }}>Please complete guest details; all guests must be 21+.</div>}
-          </div>
-
-          {/* Summary & Pay */}
-          <div style={{ borderTop: "1px solid rgba(255,255,255,.1)", marginTop: 14, paddingTop: 12 }}>
-            <Line left="Subtotal" right={`$${subtotal.toFixed(2)}`} />
-            <Line left="Member discount" right={`-$${discount.toFixed(2)}`} />
-            <Line left={<span style={{ color: "var(--muted)" }}>Total</span>} right={<span style={{ color: "var(--gold-soft)" }}>${total.toFixed(2)}</span>} />
-            <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 6 }}>
-              You’ll receive an email (and SMS if a phone is provided) with your reservation details.
-            </p>
-            <button onClick={pay} disabled={!formOK} style={payBtn(formOK)}>
-              Pay ${total.toFixed(2)} & Book
-            </button>
+            </select>
           </div>
         </div>
+      </div>
 
-        {/* Cancellation Card */}
-        <div style={sectionCard}>
-          <h3 className="font-orange gold-emboss" style={{ fontSize: 20 }}>Cancel my reservation</h3>
-          <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 6 }}>
-            {POLICY_TEXT}
-          </p>
-          <div style={{ display: "grid", gap: 12, marginTop: 12 }}>
-            <Field label="Booking code" value={cancelCode} onChange={setCancelCode} inputBase={inputBase} labelStyle={labelStyle} />
-            <Field type="email" label="Email on reservation" value={cancelEmail} onChange={setCancelEmail} inputBase={inputBase} labelStyle={labelStyle} />
-            <button type="button" onClick={requestCancel} style={payBtn(true)}>
-              Request cancellation
-            </button>
-            {date && time && (
-              <div style={{ fontSize: 12, color: is24hOrMoreAway(date, time) ? "var(--muted)" : "#ffb84d" }}>
-                {is24hOrMoreAway(date, time)
-                  ? "Your selected slot is ≥24h away (eligible for 50% refund if cancelled)."
-                  : "Selected slot is <24h away; per policy, cancellations will not be refunded."}
+      {/* Guests (all 21+) */}
+      <div style={sectionCard}>
+        <h3 className="font-orange gold-emboss" style={{ fontSize: 20, margin: 0 }}>Guest Information (21+)</h3>
+        <div style={{ display: "grid", gap: 12, marginTop: 12 }}>
+          {Array.from({ length: partySize }).map((_, i) => {
+            const g = guests[i];
+            const age = calcAge(g.dob);
+            return (
+              <div key={i} style={{ borderTop: i === 0 ? "none" : "1px solid rgba(255,255,255,.1)", paddingTop: i === 0 ? 0 : 12 }}>
+                <Field label={`Guest ${i + 1} full name (as on ID)`} value={g.fullName} onChange={(v) => setGuests((prev) => prev.map((x, idx) => (idx === i ? { ...x, fullName: v } : x)))} inputBase={inputBase} labelStyle={labelStyle} />
+                <Field type="date" label="Date of birth" value={g.dob} onChange={(v) => setGuests((prev) => prev.map((x, idx) => (idx === i ? { ...x, dob: v } : x)))} inputBase={inputBase} labelStyle={labelStyle} />
+                <div style={{ fontSize: 11, color: age && age < 21 ? "#ff6b6b" : "var(--muted)" }}>
+                  {age ? `Age: ${age}` : "Age: —"} {age && age < 21 ? "(must be 21+)" : ""}
+                </div>
               </div>
-            )}
-            {cancelMsg && (
-              <div style={{ fontSize: 12, color: "var(--muted)" }}>{cancelMsg}</div>
-            )}
-          </div>
+            );
+          })}
         </div>
+      </div>
+
+      {/* Summary & Pay */}
+      <div style={sectionCard}>
+        <h3 className="font-orange gold-emboss" style={{ fontSize: 20, margin: 0 }}>Summary</h3>
+        <div style={{ display: "grid", gap: 6, marginTop: 10 }}>
+          <SummaryLine left={`$${PRICE_PER_PERSON} × ${partySize}`} right={`$${subtotal.toFixed(2)}`} />
+          <SummaryLine left="Member discount" right={`-$${discount.toFixed(2)}`} />
+          <SummaryLine
+            left={<span style={{ color: "var(--muted)" }}>Total</span>}
+            right={<span style={{ color: "var(--gold-soft)" }}>${total.toFixed(2)}</span>}
+          />
+        </div>
+        <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 6 }}>
+          You’ll receive an email (and SMS if provided) confirming your reservation details.
+        </p>
+        <button onClick={pay} disabled={!canPay} style={payBtn(canPay)}>
+          Pay ${total.toFixed(2)} & Book
+        </button>
       </div>
     </section>
   );
 }
 
-/* ---- tiny helpers kept in this file ---- */
+/* ---------- tiny helpers kept in this file ---------- */
 function Field({ label, value, onChange, type = "text", placeholder, inputBase, labelStyle }) {
   return (
     <div>
@@ -394,41 +323,11 @@ function Field({ label, value, onChange, type = "text", placeholder, inputBase, 
     </div>
   );
 }
-
-function Line({ left, right }) {
+function SummaryLine({ left, right }) {
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6 }}>
+    <div style={{ display: "flex", justifyContent: "space-between" }}>
       <div>{left}</div>
       <div>{right}</div>
-    </div>
-  );
-}
-
-function GuestRow({ index, data, onChange, inputBase, labelStyle }) {
-  const age = calcAge(data?.dob || "");
-  return (
-    <div style={{ display: "grid", gap: 8, gridTemplateColumns: "1.2fr .8fr" }}>
-      <div>
-        <label style={labelStyle}>Guest {index} — Full name</label>
-        <input
-          type="text"
-          value={data?.fullName || ""}
-          onChange={(e) => onChange({ ...data, fullName: e.target.value })}
-          style={{ ...inputBase, marginTop: 6 }}
-        />
-      </div>
-      <div>
-        <label style={labelStyle}>Guest {index} — Date of birth</label>
-        <input
-          type="date"
-          value={data?.dob || ""}
-          onChange={(e) => onChange({ ...data, dob: e.target.value })}
-          style={{ ...inputBase, marginTop: 6 }}
-        />
-        <div style={{ fontSize: 11, color: age && age < 21 ? "#ff6b6b" : "var(--muted)", marginTop: 4 }}>
-          {age ? `Age: ${age}` : "Age: —"} {age && age < 21 ? "(must be 21+)" : ""}
-        </div>
-      </div>
     </div>
   );
 }

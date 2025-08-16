@@ -3,32 +3,29 @@ import { useMemo, useState } from "react";
 
 /**
  * After Dark Menu
- * - Four savory items may add "Botanical enhancement" (+$5 each).
- * - Dessert of the day is $10 and already set (no enhancement option).
- * - Contact info required to send order confirmations by email/SMS.
- * - "Menu subject to change."
+ * - Items: Chicken Wings, Mozzarella Sticks, Truffle Fries, Pretzel Bites, Dessert of the Day ($10)
+ * - Botanical enhancement (+$5) optional on the first four items (not on Dessert)
+ * - Collect name + email (phone optional) for receipts
+ * - Active Pay button → /api/checkout with { type: "after-dark-order", amount, meta }
+ * - *menu subject to change
  */
 
-// ---------- PRICES (edit to your exact prices if needed) ----------
 const PRICE_WINGS = 14;
 const PRICE_MOZZ = 11;
 const PRICE_TRUFFLE = 12;
 const PRICE_PRETZEL = 9;
 const PRICE_DESSERT = 10;
-const PRICE_ENHANCEMENT = 5; // add-on for the first four items
+const PRICE_ENHANCEMENT = 5;
 
-// Build initial menu state
 const INITIAL_ITEMS = [
-  { key: "wings", label: "Chicken Wings", price: PRICE_WINGS, qty: 0, enhance: false, canEnhance: true },
-  { key: "mozz", label: "Mozzarella Sticks", price: PRICE_MOZZ, qty: 0, enhance: false, canEnhance: true },
-  { key: "truffle", label: "Truffle Fries", price: PRICE_TRUFFLE, qty: 0, enhance: false, canEnhance: true },
-  { key: "pretzel", label: "Pretzel Bites", price: PRICE_PRETZEL, qty: 0, enhance: false, canEnhance: true },
-  { key: "dessert", label: "Dessert of the Day", price: PRICE_DESSERT, qty: 0, enhance: false, canEnhance: false },
+  { key: "wings",   label: "Chicken Wings",       price: PRICE_WINGS,   qty: 0, enhance: false, canEnhance: true },
+  { key: "mozz",    label: "Mozzarella Sticks",   price: PRICE_MOZZ,    qty: 0, enhance: false, canEnhance: true },
+  { key: "truffle", label: "Truffle Fries",       price: PRICE_TRUFFLE, qty: 0, enhance: false, canEnhance: true },
+  { key: "pretzel", label: "Pretzel Bites",       price: PRICE_PRETZEL, qty: 0, enhance: false, canEnhance: true },
+  { key: "dessert", label: "Dessert of the Day",  price: PRICE_DESSERT, qty: 0, enhance: false, canEnhance: false },
 ];
 
-function validEmail(e) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
-}
+function validEmail(e) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e); }
 function normPhone(p) {
   if (!p) return "";
   const digits = p.replace(/[^\d+]/g, "");
@@ -38,20 +35,19 @@ function normPhone(p) {
 }
 
 export default function AfterDarkMenuPage() {
-  // Contact for confirmations
+  // Contact
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState(""); // optional
+  const [phone, setPhone] = useState("");
 
   // Menu state
   const [items, setItems] = useState(INITIAL_ITEMS);
 
-  // Compute totals
+  // Totals
   const { lineItems, subtotal, enhancementTotal, total } = useMemo(() => {
     const li = [];
     let sub = 0;
     let enh = 0;
-
     for (const it of items) {
       if (it.qty > 0) {
         li.push({
@@ -61,35 +57,22 @@ export default function AfterDarkMenuPage() {
           enhancement: it.canEnhance ? (it.enhance ? "Yes" : "No") : "N/A",
         });
         sub += it.qty * it.price;
-        if (it.canEnhance && it.enhance) {
-          enh += it.qty * PRICE_ENHANCEMENT;
-        }
+        if (it.canEnhance && it.enhance) enh += it.qty * PRICE_ENHANCEMENT;
       }
     }
-    return {
-      lineItems: li,
-      subtotal: sub,
-      enhancementTotal: enh,
-      total: sub + enh,
-    };
+    return { lineItems: li, subtotal: sub, enhancementTotal: enh, total: sub + enh };
   }, [items]);
 
-  const canSubmit =
-    name.trim().length > 0 &&
-    validEmail(email) &&
-    total > 0;
+  const canSubmit = name.trim() && validEmail(email) && total > 0;
 
   function updateQty(key, qty) {
-    setItems(prev =>
-      prev.map(it => (it.key === key ? { ...it, qty } : it))
-    );
+    setItems(prev => prev.map(it => it.key === key ? { ...it, qty } : it));
   }
   function toggleEnhance(key, checked) {
-    setItems(prev =>
-      prev.map(it => (it.key === key ? { ...it, enhance: checked } : it))
-    );
+    setItems(prev => prev.map(it => it.key === key ? { ...it, enhance: checked } : it));
   }
 
+  // ---- PAY: posts to /api/checkout with { type, amount, meta } ----
   async function pay() {
     if (!canSubmit) return;
 
@@ -103,8 +86,6 @@ export default function AfterDarkMenuPage() {
         enhancementTotal,
         total,
       },
-      notes:
-        "Botanical enhancement is optional (+$5 per applicable item). Dessert is fixed at $10.",
       policy: "Menu subject to change.",
     };
 
@@ -112,27 +93,18 @@ export default function AfterDarkMenuPage() {
       const res = await fetch("/api/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          amount: Math.round(total * 100),
-          description: "After Dark Menu Order",
-          successPath: "/menu?status=paid",
-          cancelPath: "/menu",
-          metadata: meta,
-        }),
+        body: JSON.stringify({ type: "after-dark-order", amount: total, meta }),
       });
       const out = await res.json();
-      if (out?.url) {
-        window.location.href = out.url;
-      } else {
-        alert("Could not start payment. Please try again.");
-      }
+      if (out?.url) window.location.href = out.url;
+      else alert("Could not start payment. Please try again.");
     } catch (e) {
       console.error(e);
       alert("Payment error. Please try again.");
     }
   }
 
-  // --- styles aligned with your theme ---
+  // Theme-aligned styles
   const sectionCard = {
     borderRadius: 14,
     padding: 20,
@@ -152,6 +124,7 @@ export default function AfterDarkMenuPage() {
     color: "var(--text)",
     outline: "none",
   };
+  const qtySelectStyle = { ...inputBase, width: "100%" };
   const payBtn = (ok) => ({
     marginTop: 14,
     width: "100%",
@@ -163,7 +136,6 @@ export default function AfterDarkMenuPage() {
     color: ok ? "#000" : "var(--muted)",
     cursor: ok ? "pointer" : "not-allowed",
   });
-  const qtySelectStyle = { ...inputBase, width: "100%" };
 
   return (
     <section>
@@ -188,43 +160,19 @@ export default function AfterDarkMenuPage() {
         </div>
       </div>
 
-      {/* Menu items */}
+      {/* Menu grid */}
       <style>{`@media (min-width: 992px){ .grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:18px; } }`}</style>
       <div className="grid-2">
-        {/* Left column */}
+        {/* Savory */}
         <div style={sectionCard}>
           <h3 className="font-orange gold-emboss" style={{ fontSize: 20, margin: 0 }}>Savory</h3>
-          <ItemRow
-            item={items[0]}
-            onQty={(q)=>updateQty("wings", q)}
-            onEnhance={(c)=>toggleEnhance("wings", c)}
-            qtySelectStyle={qtySelectStyle}
-            labelStyle={labelStyle}
-          />
-          <ItemRow
-            item={items[1]}
-            onQty={(q)=>updateQty("mozz", q)}
-            onEnhance={(c)=>toggleEnhance("mozz", c)}
-            qtySelectStyle={qtySelectStyle}
-            labelStyle={labelStyle}
-          />
-          <ItemRow
-            item={items[2]}
-            onQty={(q)=>updateQty("truffle", q)}
-            onEnhance={(c)=>toggleEnhance("truffle", c)}
-            qtySelectStyle={qtySelectStyle}
-            labelStyle={labelStyle}
-          />
-          <ItemRow
-            item={items[3]}
-            onQty={(q)=>updateQty("pretzel", q)}
-            onEnhance={(c)=>toggleEnhance("pretzel", c)}
-            qtySelectStyle={qtySelectStyle}
-            labelStyle={labelStyle}
-          />
+          <ItemRow item={items[0]} onQty={(q)=>updateQty("wings", q)}   onEnhance={(c)=>toggleEnhance("wings", c)}   qtySelectStyle={qtySelectStyle} labelStyle={labelStyle} />
+          <ItemRow item={items[1]} onQty={(q)=>updateQty("mozz", q)}    onEnhance={(c)=>toggleEnhance("mozz", c)}    qtySelectStyle={qtySelectStyle} labelStyle={labelStyle} />
+          <ItemRow item={items[2]} onQty={(q)=>updateQty("truffle", q)} onEnhance={(c)=>toggleEnhance("truffle", c)} qtySelectStyle={qtySelectStyle} labelStyle={labelStyle} />
+          <ItemRow item={items[3]} onQty={(q)=>updateQty("pretzel", q)} onEnhance={(c)=>toggleEnhance("pretzel", c)} qtySelectStyle={qtySelectStyle} labelStyle={labelStyle} />
         </div>
 
-        {/* Right column */}
+        {/* Sweet */}
         <div style={sectionCard}>
           <h3 className="font-orange gold-emboss" style={{ fontSize: 20, margin: 0 }}>Sweet</h3>
           <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
@@ -251,7 +199,7 @@ export default function AfterDarkMenuPage() {
             </div>
           </div>
 
-          {/* Menu note */}
+          {/* Note */}
           <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 16 }}>
             *menu subject to change
           </p>
@@ -272,7 +220,7 @@ export default function AfterDarkMenuPage() {
         <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 6 }}>
           You’ll receive an email (and SMS if provided) confirming your order details.
         </p>
-        <button onClick={pay} disabled={!canSubmit} style={payBtn(canSubmit)}>
+        <button onClick={pay} disabled={!canSubmit} style={payBtn(!!canSubmit)}>
           Pay ${total.toFixed(2)} & Place Order
         </button>
       </div>
@@ -280,7 +228,7 @@ export default function AfterDarkMenuPage() {
   );
 }
 
-/* ------------- tiny helpers (kept in this file) ------------- */
+/* --------- tiny helpers in this file --------- */
 function Field({ label, value, onChange, type = "text", placeholder, inputBase, labelStyle }) {
   return (
     <div>
